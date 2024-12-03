@@ -1,57 +1,65 @@
-package com.rafaelnapolitano.createUrlShortner;
+package com.rafaelnapolitano.redirectUrlShortener;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 
-
+import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
-public class Main implements RequestHandler<Map<String, Object>, Map<String, String>> {
-
-    private final ObjectMapper objectMapper = new ObjectMapper();
+public class Main implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
     private final S3Client s3Client = S3Client.builder().build();
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @Override
-    public Map<String, String> handleRequest(Map<String, Object> input, Context context) {
-        String body = input.get("body").toString();
+    public Map<String, Object> handleRequest(Map<String, Object> input, Context context) {
+        String pathParameters= (String) input.get("rawPath");
+        String shortUrlCode = pathParameters.replace("/", "");
 
-        Map<String, String> bodyMap;
-        try {
-            bodyMap = objectMapper.readValue(body, Map.class);
+        if(shortUrlCode == null || shortUrlCode.isEmpty()) {
+            throw new IllegalArgumentException("Invalid input: short url required");
+        };
+
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket("url-shortner-storage-rafaelnapolitano")
+                .key(shortUrlCode + ".json")
+                .build();
+
+        InputStream s3ObjectStream;
+
+        try{
+            s3ObjectStream = s3Client.getObject(getObjectRequest);
         } catch (Exception exception){
-            throw new RuntimeException("Error parsing json"+ exception.getMessage(), exception);
+            throw new RuntimeException("Error featching Url from s3");
         }
 
-        String orignalUrl = bodyMap.get("originalUrl");
-        String expirationTime = bodyMap.get("expirationTime");
-        long expirationTimeInSeconds = Long.parseLong(expirationTime);
+        UrlData urlData;
+        try{
+            urlData = objectMapper.readValue(s3ObjectStream, UrlData.class);
 
-        String shortUrlCode = UUID.randomUUID().toString().substring(0,8);
+        } catch (Exception e){
+            throw new RuntimeException("Error deserializing url data");
+        }
 
-        UrlData urlData = new UrlData(orignalUrl, expirationTimeInSeconds);
+        long currentTimeInSecconds = System.currentTimeMillis() / 1000;
 
-        try {
-            String urlDataJson = objectMapper.writeValueAsString(urlData);
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket("url-shortner-storage-rafaelnapolitano")
-                    .key(shortUrlCode + ".json")
-                    .build();
-            s3Client.putObject(request, RequestBody.fromString(urlDataJson));
-        } catch(Exception exception) {
-            throw new RuntimeException("Error saving data to s3"+ exception.getMessage(), exception);
+        if(currentTimeInSecconds < urlData.getExpirationTime()) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("statusCode", 302);
+            Map<String, String> headers = new HashMap<>();
+            headers.put("location", urlData.getOriginalUrl());
+            response.put("headers" , headers);
+            return response;
 
         }
-        Map<String, String> response = new HashMap<>();
-        response.put("code", shortUrlCode);
-
+        Map<String, Object> response = new HashMap<>();
+        response.put("statusCode", 410);
+        response.put("body" , "This Url has Expired");
         return response;
     }
 }

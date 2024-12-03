@@ -1,4 +1,4 @@
-package com.rafaelnapolitano.createUrlShortner;
+package com.rafaelnapolitano.redirectUrlShortener;
 
 
 import lombok.AllArgsConstructor;
